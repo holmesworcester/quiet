@@ -51,6 +51,8 @@ export interface HarnessOptions {
   teamName?: string
   /** Skip libp2p in-memory bootstrap. Default true; QSS-only flows don't need libp2p. */
   skipLibp2p?: boolean
+  /** Skip IpfsService.createInstance. Default true; QSS-only flows don't need IPFS. */
+  skipIpfsCreate?: boolean
   /** Skip OrbitDb.create. Default true; only required for tests that write/read orbitdb log entries. */
   skipOrbitDbCreate?: boolean
 }
@@ -171,10 +173,14 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
   const toxiproxyAdmin = opts.toxiproxyAdmin ?? DEFAULTS.toxiproxyAdmin
   const username = opts.username ?? DEFAULTS.username
   const teamName = opts.teamName ?? DEFAULTS.teamName
-  // libp2p stays on by default — IPFS/Helia depends on it and crashes its
-  // create() without an initialised libp2p instance. Keep the option for
-  // future refactors where IPFS could be disabled too.
-  const skipLibp2p = opts.skipLibp2p ?? false
+  // For pure QSS-path scenarios (most stress tests) we don't need libp2p,
+  // IPFS, or OrbitDB initialised — QSSService only consumes the static
+  // OrbitDbService.events emitter and a few instance methods that are
+  // safe to call on an uninitialised orbitdb (handleFanoutMessage,
+  // ingestEntries — both early-return when orbitDbInstance is undefined).
+  // Skipping the heavy boot saves ~3 s per scenario.
+  const skipLibp2p = opts.skipLibp2p ?? true
+  const skipIpfsCreate = opts.skipIpfsCreate ?? true
   const skipOrbitDbCreate = opts.skipOrbitDbCreate ?? true
 
   // Allocate a fresh per-harness toxiproxy proxy (unique name + free port)
@@ -217,7 +223,9 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
     await spawnLibp2pInstancesInMemory([module])
   }
   const ipfsService = await module.resolve(IpfsService)
-  await ipfsService.createInstance()
+  if (!skipIpfsCreate) {
+    await ipfsService.createInstance()
+  }
   const localDbService = await module.resolve(LocalDbService)
 
   const community: Community = await factory.create('Community', { name: teamName })
@@ -255,7 +263,9 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
         }
       }
     }
-    await ipfsService?.stop().catch(() => undefined)
+    if (!skipIpfsCreate) {
+      await ipfsService?.stop().catch(() => undefined)
+    }
     if (!skipLibp2p) {
       await libp2pService?.close(true).catch(() => undefined)
     }
@@ -305,11 +315,14 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
 export async function bootMemberHarness(opts: MemberHarnessOptions & {
   /** Skip libp2p in-memory bootstrap. Default true. */
   skipLibp2p?: boolean
+  /** Skip IpfsService.createInstance. Default true. */
+  skipIpfsCreate?: boolean
 }): Promise<QssHarness> {
   const proxyUpstream = opts.proxyUpstream ?? DEFAULTS.proxyUpstream
   const toxiproxyAdmin = opts.toxiproxyAdmin ?? DEFAULTS.toxiproxyAdmin
   const username = opts.username
-  const skipLibp2p = opts.skipLibp2p ?? false
+  const skipLibp2p = opts.skipLibp2p ?? true
+  const skipIpfsCreate = opts.skipIpfsCreate ?? true
 
   // Multi-client scenarios pass the owner's proxy details so both clients
   // share network conditions. If only proxyName is given, derive listen from
@@ -351,7 +364,9 @@ export async function bootMemberHarness(opts: MemberHarnessOptions & {
     await spawnLibp2pInstancesInMemory([module])
   }
   const ipfsService = await module.resolve(IpfsService)
-  await ipfsService.createInstance()
+  if (!skipIpfsCreate) {
+    await ipfsService.createInstance()
+  }
   const localDbService = await module.resolve(LocalDbService)
 
   // Member's sigchain is built from the invite seed — no team yet. The team
@@ -417,7 +432,9 @@ export async function bootMemberHarness(opts: MemberHarnessOptions & {
     } catch {
       // ignore
     }
-    await ipfsService?.stop().catch(() => undefined)
+    if (!skipIpfsCreate) {
+      await ipfsService?.stop().catch(() => undefined)
+    }
     if (!skipLibp2p) {
       await libp2pService?.close(true).catch(() => undefined)
     }
