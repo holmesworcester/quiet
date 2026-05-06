@@ -25,12 +25,14 @@ import {
   type ChaosProfile,
   type FlapWindow,
   type OutageWindow,
+  type PauseWindow,
   type ScenarioPhase,
   type ScenarioResult,
   fingerprintError,
   makeRng,
   randomProfile,
 } from '../fuzz'
+import { eventLoopPause } from '../chaos'
 
 jest.setTimeout(240_000)
 
@@ -56,11 +58,34 @@ async function maybeOutage(
   profile: ChaosProfile,
   phase: ScenarioPhase
 ): Promise<void> {
-  for (const outage of (profile.outages ?? []).filter(o => o.at === phase)) {
+  const consumedOutages = new Set<OutageWindow>()
+  for (const pause of (profile.pauses ?? []).filter(p => p.at === phase)) {
+    const samePhaseOutage = (profile.outages ?? []).find(
+      o => o.at === phase && o.durationMs <= pause.durationMs && !consumedOutages.has(o)
+    )
+    await schedulePause(harness, pause, samePhaseOutage)
+    if (samePhaseOutage != null) consumedOutages.add(samePhaseOutage)
+  }
+  for (const outage of (profile.outages ?? []).filter(o => o.at === phase && !consumedOutages.has(o))) {
     await scheduleOutage(harness, outage)
   }
   for (const flap of (profile.flaps ?? []).filter(f => f.at === phase)) {
     await scheduleFlap(harness, flap)
+  }
+}
+
+async function schedulePause(
+  harness: QssHarness,
+  pause: PauseWindow,
+  pairedOutage: OutageWindow | undefined
+): Promise<void> {
+  if (pairedOutage != null) {
+    await harness.toxiproxy.setEnabled(harness.proxyName, false).catch(() => undefined)
+  }
+  eventLoopPause(pause.durationMs)
+  if (pairedOutage != null) {
+    await harness.toxiproxy.setEnabled(harness.proxyName, true).catch(() => undefined)
+    await harness.qssService.connect(harness.qssEndpoint, true).catch(() => undefined)
   }
 }
 
