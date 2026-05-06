@@ -114,6 +114,10 @@ export class ToxiproxyClient {
     }
   }
 
+  async deleteProxy(proxyName: string): Promise<void> {
+    await this.request<void>('DELETE', `/proxies/${proxyName}`)
+  }
+
   /** Reset all proxies to a clean state. */
   async reset(): Promise<void> {
     await this.request<void>('POST', '/reset', {})

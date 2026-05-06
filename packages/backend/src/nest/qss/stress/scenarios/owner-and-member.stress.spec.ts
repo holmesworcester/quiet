@@ -55,7 +55,14 @@ describe('QSS stress: owner + member join over QSS', () => {
 
     // ── Member ────────────────────────────────────────────────────────
     const invite = generateOwnerInvite(owner)
-    member = await bootMemberHarness({ invite, username: 'member' })
+    member = await bootMemberHarness({
+      invite,
+      username: 'member',
+      // Share the owner's proxy so any chaos applies to both clients.
+      proxyName: owner.proxyName,
+      proxyListen: owner.proxyListen,
+      qssEndpoint: owner.qssEndpoint,
+    })
     member.primeCaptcha()
     await member.qssService.connect(member.qssEndpoint, true)
     await expectQssConnectedWithin(member, 15_000)

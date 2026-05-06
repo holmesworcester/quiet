@@ -47,7 +47,13 @@ describe('QSS stress: owner posts, member receives via fanout', () => {
 
     const invite = generateOwnerInvite(owner)
 
-    member = await bootMemberHarness({ invite, username: 'member' })
+    member = await bootMemberHarness({
+      invite,
+      username: 'member',
+      proxyName: owner.proxyName,
+      proxyListen: owner.proxyListen,
+      qssEndpoint: owner.qssEndpoint,
+    })
     member.primeCaptcha()
     await member.qssService.connect(member.qssEndpoint, true)
     await expectQssConnectedWithin(member, 15_000)

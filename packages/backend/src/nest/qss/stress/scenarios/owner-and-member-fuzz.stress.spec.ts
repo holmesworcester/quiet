@@ -118,7 +118,13 @@ async function runOwnerThenMember(profile: ChaosProfile, seed: number): Promise<
     // by this point in the flow; chaos primarily lands on the member.
     await applyToxics(owner, profile)
 
-    member = await bootMemberHarness({ invite, username: `member-${seed}` })
+    member = await bootMemberHarness({
+      invite,
+      username: `member-${seed}`,
+      proxyName: owner.proxyName,
+      proxyListen: owner.proxyListen,
+      qssEndpoint: owner.qssEndpoint,
+    })
 
     await maybeOutage(member, profile, 'preConnect')
     member.primeCaptcha()
