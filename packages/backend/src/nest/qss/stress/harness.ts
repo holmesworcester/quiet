@@ -9,6 +9,7 @@
  */
 import { Test, TestingModule } from '@nestjs/testing'
 import * as fs from 'node:fs'
+import * as net from 'node:net'
 
 import { TestModule } from '../../common/test.module'
 import { QSSModule } from '../qss.module'
@@ -33,13 +34,14 @@ import { getReduxStoreFactory, prepareStore, Store } from '@quiet/state-manager'
 import { FactoryGirl } from 'factory-girl'
 
 export interface HarnessOptions {
-  /** URL the QSSService will see for QSS — typically the toxiproxy listener. */
+  /** URL the QSSService will see for QSS — typically the toxiproxy listener.
+   *  If omitted, a fresh proxy is allocated on a free local port and that URL is used. */
   qssEndpoint?: string
   /** Toxiproxy admin URL (defaults to http://127.0.0.1:8474). */
   toxiproxyAdmin?: string
-  /** Name of the proxy to create at the admin API. */
+  /** Name of the proxy to create at the admin API. Auto-generated if omitted. */
   proxyName?: string
-  /** Where the proxy listens (host:port form). Must match qssEndpoint host:port. */
+  /** Where the proxy listens (host:port form). Auto-allocated if omitted. */
   proxyListen?: string
   /** Upstream — where the QSS server actually runs (host:port). */
   proxyUpstream?: string
@@ -47,6 +49,12 @@ export interface HarnessOptions {
   username?: string
   /** Team name. */
   teamName?: string
+  /** Skip libp2p in-memory bootstrap. Default true; QSS-only flows don't need libp2p. */
+  skipLibp2p?: boolean
+  /** Skip IpfsService.createInstance. Default true; QSS-only flows don't need IPFS. */
+  skipIpfsCreate?: boolean
+  /** Skip OrbitDb.create. Default true; only required for tests that write/read orbitdb log entries. */
+  skipOrbitDbCreate?: boolean
 }
 
 export interface QssHarness {
@@ -64,6 +72,7 @@ export interface QssHarness {
   factory: FactoryGirl
   toxiproxy: ToxiproxyClient
   proxyName: string
+  proxyListen: string
   qssEndpoint: string
   community: Community
   identity: Identity
@@ -131,27 +140,58 @@ export interface MemberHarnessOptions {
 }
 
 export const DEFAULTS = {
-  qssEndpoint: process.env.QSS_STRESS_ENDPOINT ?? 'ws://127.0.0.1:3013',
   toxiproxyAdmin: process.env.TOXIPROXY_ADMIN ?? 'http://127.0.0.1:8474',
-  proxyName: 'qss',
-  proxyListen: process.env.QSS_STRESS_LISTEN ?? '127.0.0.1:3013',
   proxyUpstream: process.env.QSS_STRESS_UPSTREAM ?? '127.0.0.1:3003',
   username: 'stress-user',
   teamName: 'stress-community',
 }
 
+/** Find a free TCP port by binding to 0 and reading what the OS gave us. */
+async function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.unref()
+    srv.on('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address()
+      const port = typeof addr === 'object' && addr != null ? addr.port : 0
+      srv.close(err => (err ? reject(err) : resolve(port)))
+    })
+  })
+}
+
+let proxyCounter = 0
+const proxyId = (): string => {
+  const pid = process.pid
+  const wid = process.env.JEST_WORKER_ID ?? '0'
+  const n = ++proxyCounter
+  return `qss-${pid}-${wid}-${n}`
+}
+
 export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarness> {
-  const proxyName = opts.proxyName ?? DEFAULTS.proxyName
-  const proxyListen = opts.proxyListen ?? DEFAULTS.proxyListen
   const proxyUpstream = opts.proxyUpstream ?? DEFAULTS.proxyUpstream
   const toxiproxyAdmin = opts.toxiproxyAdmin ?? DEFAULTS.toxiproxyAdmin
-  const qssEndpoint = opts.qssEndpoint ?? DEFAULTS.qssEndpoint
   const username = opts.username ?? DEFAULTS.username
   const teamName = opts.teamName ?? DEFAULTS.teamName
+  // For pure QSS-path scenarios (most stress tests) we don't need libp2p,
+  // IPFS, or OrbitDB initialised — QSSService only consumes the static
+  // OrbitDbService.events emitter and a few instance methods that are
+  // safe to call on an uninitialised orbitdb (handleFanoutMessage,
+  // ingestEntries — both early-return when orbitDbInstance is undefined).
+  // Skipping the heavy boot saves ~3 s per scenario.
+  const skipLibp2p = opts.skipLibp2p ?? true
+  const skipIpfsCreate = opts.skipIpfsCreate ?? true
+  const skipOrbitDbCreate = opts.skipOrbitDbCreate ?? true
+
+  // Allocate a fresh per-harness toxiproxy proxy (unique name + free port)
+  // so multiple harnesses can run in parallel under jest --maxWorkers=N.
+  const proxyName = opts.proxyName ?? proxyId()
+  const proxyPort = opts.proxyListen != null ? Number(opts.proxyListen.split(':')[1]) : await pickFreePort()
+  const proxyListen = opts.proxyListen ?? `127.0.0.1:${proxyPort}`
+  const qssEndpoint = opts.qssEndpoint ?? `ws://127.0.0.1:${proxyPort}`
 
   const adminUrl = new URL(toxiproxyAdmin)
   const toxiproxy = new ToxiproxyClient(adminUrl.hostname, Number(adminUrl.port || 8474))
-  // fail loudly if toxiproxy isn't up — better than vague socket errors later
   await toxiproxy.ping()
   await toxiproxy.ensureProxy({
     name: proxyName,
@@ -179,9 +219,13 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
   const sigchainService = module.get<SigChainService>(SigChainService)
   const captchaService = module.get<CaptchaService>(CaptchaService)
   const libp2pService = await module.resolve(Libp2pService)
-  await spawnLibp2pInstancesInMemory([module])
+  if (!skipLibp2p) {
+    await spawnLibp2pInstancesInMemory([module])
+  }
   const ipfsService = await module.resolve(IpfsService)
-  await ipfsService.createInstance()
+  if (!skipIpfsCreate) {
+    await ipfsService.createInstance()
+  }
   const localDbService = await module.resolve(LocalDbService)
 
   const community: Community = await factory.create('Community', { name: teamName })
@@ -191,7 +235,9 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
   await sigchainService.createChain(community.name!, username, true)
 
   const orbitDbService = await module.resolve(OrbitDbService)
-  await orbitDbService.create(ipfsService.ipfsInstance!)
+  if (!skipOrbitDbCreate) {
+    await orbitDbService.create(ipfsService.ipfsInstance!)
+  }
 
   await localDbService.setCommunity({ ...community, qssEnabled: true, qssSetup: false } as any)
   await localDbService.setCurrentCommunityId(community.id)
@@ -199,21 +245,30 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
 
   const shutdown = async (): Promise<void> => {
     await toxiproxy.clearToxics(proxyName).catch(() => undefined)
+    // Delete the per-harness proxy so accumulated proxies don't pile up in
+    // toxiproxy under long sweeps.
+    await toxiproxy.deleteProxy(proxyName).catch(() => undefined)
     try {
       qssService.close()
     } catch {
       // ignore
     }
-    await orbitDbService?.stop().catch(() => undefined)
-    if (orbitDbService?.orbitDbDir != null && fs.existsSync(orbitDbService.orbitDbDir)) {
-      try {
-        fs.rmSync(orbitDbService.orbitDbDir, { recursive: true })
-      } catch {
-        // ignore
+    if (!skipOrbitDbCreate) {
+      await orbitDbService?.stop().catch(() => undefined)
+      if (orbitDbService?.orbitDbDir != null && fs.existsSync(orbitDbService.orbitDbDir)) {
+        try {
+          fs.rmSync(orbitDbService.orbitDbDir, { recursive: true })
+        } catch {
+          // ignore
+        }
       }
     }
-    await ipfsService?.stop().catch(() => undefined)
-    await libp2pService?.close(true).catch(() => undefined)
+    if (!skipIpfsCreate) {
+      await ipfsService?.stop().catch(() => undefined)
+    }
+    if (!skipLibp2p) {
+      await libp2pService?.close(true).catch(() => undefined)
+    }
     await localDbService?.close().catch(() => undefined)
     await module?.close().catch(() => undefined)
   }
@@ -237,6 +292,7 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
     factory,
     toxiproxy,
     proxyName,
+    proxyListen,
     qssEndpoint,
     community: (await localDbService.getCurrentCommunity())!,
     identity,
@@ -256,18 +312,29 @@ export async function bootQssHarness(opts: HarnessOptions = {}): Promise<QssHarn
  * The owner harness must be running and its auth connection active when the
  * member is booted, otherwise the AUTH_SYNC routing has no peer.
  */
-export async function bootMemberHarness(opts: MemberHarnessOptions): Promise<QssHarness> {
-  const proxyName = opts.proxyName ?? DEFAULTS.proxyName
-  const proxyListen = opts.proxyListen ?? DEFAULTS.proxyListen
+export async function bootMemberHarness(opts: MemberHarnessOptions & {
+  /** Skip libp2p in-memory bootstrap. Default true. */
+  skipLibp2p?: boolean
+  /** Skip IpfsService.createInstance. Default true. */
+  skipIpfsCreate?: boolean
+}): Promise<QssHarness> {
   const proxyUpstream = opts.proxyUpstream ?? DEFAULTS.proxyUpstream
   const toxiproxyAdmin = opts.toxiproxyAdmin ?? DEFAULTS.toxiproxyAdmin
-  const qssEndpoint = opts.qssEndpoint ?? DEFAULTS.qssEndpoint
   const username = opts.username
+  const skipLibp2p = opts.skipLibp2p ?? true
+  const skipIpfsCreate = opts.skipIpfsCreate ?? true
+
+  // Multi-client scenarios pass the owner's proxy details so both clients
+  // share network conditions. If only proxyName is given, derive listen from
+  // toxiproxy admin lookup; if proxyListen is given, use it directly.
+  const proxyName = opts.proxyName ?? proxyId()
+  const proxyPort = opts.proxyListen != null ? Number(opts.proxyListen.split(':')[1]) : await pickFreePort()
+  const proxyListen = opts.proxyListen ?? `127.0.0.1:${proxyPort}`
+  const qssEndpoint = opts.qssEndpoint ?? `ws://127.0.0.1:${proxyPort}`
 
   const adminUrl = new URL(toxiproxyAdmin)
   const toxiproxy = new ToxiproxyClient(adminUrl.hostname, Number(adminUrl.port || 8474))
   await toxiproxy.ping()
-  // The owner harness already created the proxy. ensureProxy is idempotent.
   await toxiproxy.ensureProxy({
     name: proxyName,
     listen: proxyListen,
@@ -293,9 +360,13 @@ export async function bootMemberHarness(opts: MemberHarnessOptions): Promise<Qss
   const sigchainService = module.get<SigChainService>(SigChainService)
   const captchaService = module.get<CaptchaService>(CaptchaService)
   const libp2pService = await module.resolve(Libp2pService)
-  await spawnLibp2pInstancesInMemory([module])
+  if (!skipLibp2p) {
+    await spawnLibp2pInstancesInMemory([module])
+  }
   const ipfsService = await module.resolve(IpfsService)
-  await ipfsService.createInstance()
+  if (!skipIpfsCreate) {
+    await ipfsService.createInstance()
+  }
   const localDbService = await module.resolve(LocalDbService)
 
   // Member's sigchain is built from the invite seed — no team yet. The team
@@ -350,21 +421,23 @@ export async function bootMemberHarness(opts: MemberHarnessOptions): Promise<Qss
   }
 
   const shutdown = async (): Promise<void> => {
+    // For member harnesses: only delete the proxy if we created it
+    // (i.e., it was not passed in by the caller).
+    if (opts.proxyName == null) {
+      await toxiproxy.clearToxics(proxyName).catch(() => undefined)
+      await toxiproxy.deleteProxy(proxyName).catch(() => undefined)
+    }
     try {
       qssService.close()
     } catch {
       // ignore
     }
-    await orbitDbService?.stop().catch(() => undefined)
-    if (orbitDbService?.orbitDbDir != null && fs.existsSync(orbitDbService.orbitDbDir)) {
-      try {
-        fs.rmSync(orbitDbService.orbitDbDir, { recursive: true })
-      } catch {
-        // ignore
-      }
+    if (!skipIpfsCreate) {
+      await ipfsService?.stop().catch(() => undefined)
     }
-    await ipfsService?.stop().catch(() => undefined)
-    await libp2pService?.close(true).catch(() => undefined)
+    if (!skipLibp2p) {
+      await libp2pService?.close(true).catch(() => undefined)
+    }
     await localDbService?.close().catch(() => undefined)
     await module?.close().catch(() => undefined)
   }
@@ -384,6 +457,7 @@ export async function bootMemberHarness(opts: MemberHarnessOptions): Promise<Qss
     factory,
     toxiproxy,
     proxyName,
+    proxyListen,
     qssEndpoint,
     community: (await localDbService.getCurrentCommunity())!,
     identity,

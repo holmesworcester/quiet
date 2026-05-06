@@ -30,6 +30,22 @@ export interface FlapWindow {
   totalMs: number
 }
 
+/**
+ * Synchronous JS event-loop block. Models "phone backgrounded": V8 stops
+ * scheduling callbacks while the OS suspends the app. The TCP socket stays
+ * alive at the kernel level (until keepalive expires) but no JS handler
+ * runs on it for the duration. See `chaos.ts:eventLoopPause`.
+ *
+ * If the same phase also has an outage with `durationMs <= pause.durationMs`,
+ * the orchestrator disables the proxy at the start of the pause so a
+ * kernel-level connection drop completes during the JS suspension —
+ * matches the "TCP keepalive expires while phone is asleep" path.
+ */
+export interface PauseWindow {
+  at: ScenarioPhase
+  durationMs: number
+}
+
 export interface ChaosProfile {
   name: string
   /** Applied for the lifetime of the scenario. */
@@ -38,6 +54,8 @@ export interface ChaosProfile {
   outages?: OutageWindow[]
   /** Rapid enable/disable cycles applied at specific phases. */
   flaps?: FlapWindow[]
+  /** Synchronous JS event-loop suspension at specific phases. */
+  pauses?: PauseWindow[]
 }
 
 /**
@@ -251,6 +269,28 @@ export const CHAOS_PROFILES: readonly ChaosProfile[] = [
         attributes: { timeout: 0 },
       },
     ],
+  },
+  // ── pause profiles (event-loop block) ───────────────────────────────
+  // Models "phone backgrounded mid-handshake": JS pauses entirely, kernel
+  // socket stays alive (unless paired with an outage to model keepalive expiry).
+  {
+    name: 'pause-2s-pre-create',
+    pauses: [{ at: 'preCreate', durationMs: 2_000 }],
+  },
+  {
+    name: 'pause-10s-during-authsync',
+    pauses: [{ at: 'duringAuthSync', durationMs: 10_000 }],
+  },
+  {
+    name: 'pause-30s-pre-create',
+    pauses: [{ at: 'preCreate', durationMs: 30_000 }],
+  },
+  // Pause + outage: JS frozen AND kernel-side TCP teardown happens during the
+  // freeze. On resume the socket is dead and the service has to reconnect.
+  {
+    name: 'pause-10s-with-outage-during-authsync',
+    pauses: [{ at: 'duringAuthSync', durationMs: 10_000 }],
+    outages: [{ at: 'duringAuthSync', durationMs: 8_000 }],
   },
 ]
 

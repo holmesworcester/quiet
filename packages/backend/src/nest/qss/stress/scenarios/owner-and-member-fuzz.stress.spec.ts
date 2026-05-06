@@ -25,12 +25,14 @@ import {
   type ChaosProfile,
   type FlapWindow,
   type OutageWindow,
+  type PauseWindow,
   type ScenarioPhase,
   type ScenarioResult,
   fingerprintError,
   makeRng,
   randomProfile,
 } from '../fuzz'
+import { eventLoopPause } from '../chaos'
 
 jest.setTimeout(240_000)
 
@@ -56,11 +58,34 @@ async function maybeOutage(
   profile: ChaosProfile,
   phase: ScenarioPhase
 ): Promise<void> {
-  for (const outage of (profile.outages ?? []).filter(o => o.at === phase)) {
+  const consumedOutages = new Set<OutageWindow>()
+  for (const pause of (profile.pauses ?? []).filter(p => p.at === phase)) {
+    const samePhaseOutage = (profile.outages ?? []).find(
+      o => o.at === phase && o.durationMs <= pause.durationMs && !consumedOutages.has(o)
+    )
+    await schedulePause(harness, pause, samePhaseOutage)
+    if (samePhaseOutage != null) consumedOutages.add(samePhaseOutage)
+  }
+  for (const outage of (profile.outages ?? []).filter(o => o.at === phase && !consumedOutages.has(o))) {
     await scheduleOutage(harness, outage)
   }
   for (const flap of (profile.flaps ?? []).filter(f => f.at === phase)) {
     await scheduleFlap(harness, flap)
+  }
+}
+
+async function schedulePause(
+  harness: QssHarness,
+  pause: PauseWindow,
+  pairedOutage: OutageWindow | undefined
+): Promise<void> {
+  if (pairedOutage != null) {
+    await harness.toxiproxy.setEnabled(harness.proxyName, false).catch(() => undefined)
+  }
+  eventLoopPause(pause.durationMs)
+  if (pairedOutage != null) {
+    await harness.toxiproxy.setEnabled(harness.proxyName, true).catch(() => undefined)
+    await harness.qssService.connect(harness.qssEndpoint, true).catch(() => undefined)
   }
 }
 
@@ -118,7 +143,13 @@ async function runOwnerThenMember(profile: ChaosProfile, seed: number): Promise<
     // by this point in the flow; chaos primarily lands on the member.
     await applyToxics(owner, profile)
 
-    member = await bootMemberHarness({ invite, username: `member-${seed}` })
+    member = await bootMemberHarness({
+      invite,
+      username: `member-${seed}`,
+      proxyName: owner.proxyName,
+      proxyListen: owner.proxyListen,
+      qssEndpoint: owner.qssEndpoint,
+    })
 
     await maybeOutage(member, profile, 'preConnect')
     member.primeCaptcha()
@@ -187,7 +218,8 @@ for (let i = 0; i < FUZZ_RUNS; i++) {
 }
 
 describe('QSS stress: fuzz sweep over owner+member join', () => {
-  it.each(CHAOS_PROFILES.map((p): [string, ChaosProfile, number] => [p.name, p, 0]))(
+  // it.concurrent.each runs cases in parallel within this describe block.
+  it.concurrent.each(CHAOS_PROFILES.map((p): [string, ChaosProfile, number] => [p.name, p, 0]))(
     'profile %s',
     async (_name, profile, seed) => {
       const result = await runOwnerThenMember(profile, seed)
@@ -201,7 +233,7 @@ describe('QSS stress: fuzz sweep over owner+member join', () => {
   )
 
   if (fuzzCases.length > 0) {
-    it.each(fuzzCases)('random-fuzz %s', async (_name, profile, seed) => {
+    it.concurrent.each(fuzzCases)('random-fuzz %s', async (_name, profile, seed) => {
       const result = await runOwnerThenMember(profile, seed)
       if (result.outcome !== 'success') {
         throw new Error(

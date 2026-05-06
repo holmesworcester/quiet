@@ -27,7 +27,7 @@
     "test-ci": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" jest --runInBand --colors --ci --silent --verbose --detectOpenHandles --forceExit --testPathIgnorePatterns \"/node_modules/\" --testPathIgnorePatterns \"/dist/\" --testPathIgnorePatterns \"src/nest/.*\\.tor\\.spec\\.(t|j)s$\" --testPathIgnorePatterns \"src/nest/.*\\.stress\\.spec\\.(t|j)s$\" --testPathIgnorePatterns \"src/nest/ipfs-file-manager/big-files\\.long\\.spec\\.ts$\"",
     "test-ci-tor": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" jest --runInBand --colors --ci --verbose --detectOpenHandles --forceExit ./src/nest/**/*.tor.spec.ts",
     "test-ci-long-running": "cross-env DEBUG=backend:* NODE_OPTIONS=\"--experimental-vm-modules\" jest --colors --ci --verbose --detectOpenHandles --forceExit ./src/nest/**/*.long.spec.ts",
-    "test-stress-qss": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" DEBUG=backend:qss* jest --config jest.stress.config.js --runInBand --colors --verbose --detectOpenHandles --forceExit",
+    "test-stress-qss": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" jest --config jest.stress.config.js --colors --verbose --forceExit --maxWorkers=8",
     "test-connect": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" DEBUG='libp2p:websockets*' jest ./src/nodeTest/* --verbose",
     "test-connect-ci": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" jest ./src/nodeTest/* --colors --ci --silent --verbose",
     "test-replication-no-tor": "cross-env NODE_OPTIONS=\"--experimental-vm-modules\" ts-node -v && cross-env DEBUG='backend:dbSnap*,backend:localTest*' ts-node src/nodeTest/testReplicate.ts --nodesCount 1 --timeThreshold 200 --entriesCount 1000 --no-useTor",
