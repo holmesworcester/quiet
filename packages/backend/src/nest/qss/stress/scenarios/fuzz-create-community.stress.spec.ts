@@ -184,7 +184,10 @@ for (let i = 0; i < FUZZ_RUNS; i++) {
 }
 
 describe('QSS stress: fuzz sweep over fresh community creation', () => {
-  it.each(CHAOS_PROFILES.map((p, i): [string, ChaosProfile, number] => [p.name, p, 0]))(
+  // it.concurrent.each runs cases in parallel within this describe block.
+  // Per-test isolation is provided by per-harness toxiproxy proxies + per-test
+  // teamIds, so concurrent execution against a shared QSS server is safe.
+  it.concurrent.each(CHAOS_PROFILES.map((p, i): [string, ChaosProfile, number] => [p.name, p, 0]))(
     'profile %s',
     async (_name, profile, seed) => {
       const result = await runFreshCreate(profile, seed)
@@ -198,7 +201,7 @@ describe('QSS stress: fuzz sweep over fresh community creation', () => {
   )
 
   if (fuzzCases.length > 0) {
-    it.each(fuzzCases)('random-fuzz %s', async (_name, profile, seed) => {
+    it.concurrent.each(fuzzCases)('random-fuzz %s', async (_name, profile, seed) => {
       const result = await runFreshCreate(profile, seed)
       if (result.outcome !== 'success') {
         throw new Error(

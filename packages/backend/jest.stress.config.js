@@ -13,6 +13,9 @@ export default {
   coverageProvider: 'v8',
   transformIgnorePatterns: ['node_modules/(?!p-defer|peer-id)'],
   testTimeout: 240_000,
+  // Default jest maxConcurrency is 5; bump so it.concurrent.each runs more
+  // cases in parallel within a single describe.
+  maxConcurrency: 16,
   setupFiles: ['./jestSetup.ts'],
   testEnvironment: 'jest-environment-node',
   testRegex: ['[\\\\/]src[\\\\/]nest[\\\\/]qss[\\\\/]stress[\\\\/].*\\.stress\\.spec\\.ts$'],

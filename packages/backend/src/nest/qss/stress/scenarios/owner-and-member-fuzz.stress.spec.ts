@@ -193,7 +193,8 @@ for (let i = 0; i < FUZZ_RUNS; i++) {
 }
 
 describe('QSS stress: fuzz sweep over owner+member join', () => {
-  it.each(CHAOS_PROFILES.map((p): [string, ChaosProfile, number] => [p.name, p, 0]))(
+  // it.concurrent.each runs cases in parallel within this describe block.
+  it.concurrent.each(CHAOS_PROFILES.map((p): [string, ChaosProfile, number] => [p.name, p, 0]))(
     'profile %s',
     async (_name, profile, seed) => {
       const result = await runOwnerThenMember(profile, seed)
@@ -207,7 +208,7 @@ describe('QSS stress: fuzz sweep over owner+member join', () => {
   )
 
   if (fuzzCases.length > 0) {
-    it.each(fuzzCases)('random-fuzz %s', async (_name, profile, seed) => {
+    it.concurrent.each(fuzzCases)('random-fuzz %s', async (_name, profile, seed) => {
       const result = await runOwnerThenMember(profile, seed)
       if (result.outcome !== 'success') {
         throw new Error(
