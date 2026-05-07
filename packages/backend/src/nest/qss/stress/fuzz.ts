@@ -6,6 +6,7 @@
  * repeatedly with different seeds; failures print the seed for repro.
  */
 import { Toxic } from './toxiproxy'
+import type { WireFault } from './precise-faults'
 
 export type ScenarioPhase =
   | 'preConnect' // before qssService.connect()
@@ -38,6 +39,18 @@ export interface ChaosProfile {
   outages?: OutageWindow[]
   /** Rapid enable/disable cycles applied at specific phases. */
   flaps?: FlapWindow[]
+  /**
+   * Per-message wire-event faults — pinned to the exact `socket.emit`
+   * boundary of a specific QSS round-trip rather than a coarse phase. See
+   * `precise-faults.ts` for the catalog of {@link WireFault.at} values.
+   *
+   * Wire faults are installed by `installWireFaultHooks(harness, wireFaults)`
+   * — the scenario calls that helper after booting the harness and removes
+   * the hooks via the returned `restore()` in a `finally`. They compose with
+   * `toxics` / `outages` / `flaps`: the latter act on phase windows, the
+   * former on individual round-trips.
+   */
+  wireFaults?: WireFault[]
 }
 
 /**
