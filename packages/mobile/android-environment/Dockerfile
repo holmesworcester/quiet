@@ -3,7 +3,7 @@
 # https://hub.docker.com/layers/library/node/20.20.1/images
 
 # ***when upgrading node*** edit this line with the new version and index digest:
-FROM node:20.20.1@sha256:e391c5561646193be929e3fe55d27234f40a01d867d72b30ae1341b673a3bf4b
+FROM node:26.8.1@sha256:f5d1cc40abc10c2843339a2134d07817cf33c405cb16bfd052b0ed790254c3a3
 
 RUN apt-get update && apt-get install -y android-sdk openjdk-17-jdk wget zip
 RUN ls /usr/lib/jvm/
